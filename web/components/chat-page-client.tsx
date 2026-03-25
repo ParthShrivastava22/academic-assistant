@@ -36,7 +36,11 @@ interface ChatPageClientProps {
 // Which panel is visible on mobile
 type MobileTab = "pdf" | "chat";
 
-export function ChatPageClient({ docTitle, fileUrl }: ChatPageClientProps) {
+export function ChatPageClient({
+  docId,
+  docTitle,
+  fileUrl,
+}: ChatPageClientProps) {
   const [pdfPanelOpen, setPdfPanelOpen] = useState(true);
   const [mobileTab, setMobileTab] = useState<MobileTab>("chat");
 
@@ -152,7 +156,7 @@ export function ChatPageClient({ docTitle, fileUrl }: ChatPageClientProps) {
             md:flex md:flex-1
           `}
         >
-          <ChatWindow docTitle={docTitle} />
+          <ChatWindow docId={docId} docTitle={docTitle} />
         </div>
       </div>
     </div>

@@ -10,3 +10,4 @@ requests
 huggingface-hub
 langchain-community
 langchain-huggingface
+httpx

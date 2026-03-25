@@ -14,13 +14,12 @@ async function triggerIngestion(docId: string, fileUrl: string) {
   const secret = process.env.INTERNAL_API_SECRET;
 
   if (!ragApiUrl || !secret) {
-    console.error(
-      "[INGEST] RAG_API_URL or INTERNAL_API_SECRET missing in .env.local",
-    );
+    console.error("[INGEST] RAG_API_URL or INTERNAL_API_SECRET missing");
     return;
   }
 
   try {
+    // FastAPI returns 202 immediately — ingestion runs in its background
     const response = await fetch(`${ragApiUrl}/ingest`, {
       method: "POST",
       headers: {
@@ -34,28 +33,10 @@ async function triggerIngestion(docId: string, fileUrl: string) {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      console.error("[INGEST] FastAPI returned error:", error);
-
-      // Mark the document as errored in MongoDB
-      await connectToDatabase();
-      await DocumentModel.findByIdAndUpdate(docId, { status: "error" });
-      return;
+      console.error("[INGEST] FastAPI rejected the request:", response.status);
     }
-
-    const data = await response.json();
-    console.log(
-      `[INGEST] Success — ${data.chunks_stored} chunks stored for doc ${docId}`,
-    );
-
-    // Mark the document as ready in MongoDB
-    await connectToDatabase();
-    await DocumentModel.findByIdAndUpdate(docId, { status: "ready" });
   } catch (err) {
     console.error("[INGEST] Failed to reach FastAPI server:", err);
-
-    await connectToDatabase();
-    await DocumentModel.findByIdAndUpdate(docId, { status: "error" });
   }
 }
 
