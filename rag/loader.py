@@ -32,7 +32,7 @@ def load_document_from_url(file_url: str, doc_id: str) -> list[Document]:
     loads it with PyPDFLoader, tags every page with doc_id.
     """
 
-    response = requests.get(file_url, timeout=30)
+    response = requests.get(file_url, timeout=30, stream = True)
     response.raise_for_status()
 
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
@@ -45,6 +45,7 @@ def load_document_from_url(file_url: str, doc_id: str) -> list[Document]:
 
         for doc in docs:
             doc.metadata["doc_id"] = doc_id
+            doc.metadata["source_url"] = file_url
 
         return docs
     finally:
