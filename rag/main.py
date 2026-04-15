@@ -101,7 +101,7 @@ def ingest(
     verify_internal_token(x_internal_token)
 
     web_url = os.environ.get("WEB_URL", "http://localhost:3000")
-    callback_url = f"{web_url}/api/documents/status-update"
+    callback_url = f"{web_url}/api/ingest-callback"
     secret = os.environ["INTERNAL_API_SECRET"]
 
     background_tasks.add_task(

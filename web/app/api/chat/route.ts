@@ -1,7 +1,8 @@
 import { NextRequest } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { connectToDatabase } from "@/lib/mongodb";
-import { DocumentModel } from "@/models/Document";
+import { ProjectModel } from "@/models/Project";
+import { PaperModel } from "@/models/Paper";
 
 interface Message {
   role: "user" | "assistant";
@@ -9,57 +10,66 @@ interface Message {
 }
 
 interface ChatRequestBody {
-  docId: string;
+  projectId: string;
   question: string;
-  history: Message[]; // previous messages for context
+  history: Message[];
 }
 
-// Fetches relevant chunks from FastAPI /query
-async function getRelevantChunks(
-  question: string,
-  docId: string,
-): Promise<string> {
-  const ragApiUrl = process.env.RAG_API_URL;
-  const secret = process.env.INTERNAL_API_SECRET;
-
-  const res = await fetch(`${ragApiUrl}/query`, {
+async function getRelevantChunks(question: string, projectId: string) {
+  const res = await fetch(`${process.env.RAG_API_URL}/query`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-internal-token": secret!,
+      "x-internal-token": process.env.INTERNAL_API_SECRET!,
     },
-    body: JSON.stringify({ doc_id: docId, question }),
+    body: JSON.stringify({
+      project_id: projectId,
+      question,
+    }),
   });
 
-  if (!res.ok) {
-    throw new Error(`FastAPI /query failed: ${res.status}`);
-  }
+  if (!res.ok) throw new Error(`FastAPI /query failed: ${res.status}`);
 
-  const data = await res.json();
-
-  // Join chunks into a single context string, labelling each page
-  return data.sources
-    .map((s: { content: string; page: number | null }) =>
-      s.page !== null ? `[Page ${s.page + 1}]\n${s.content}` : s.content,
-    )
-    .join("\n\n---\n\n");
+  return res.json();
 }
 
-// Builds the prompt sent to the LLM
 function buildPrompt(
-  context: string,
+  sources: {
+    content: string;
+    paper_title: string;
+    authors: string[];
+    page: number | null;
+  }[],
   history: Message[],
   question: string,
 ): string {
+  // Format each chunk with its paper citation
+  const contextBlock = sources
+    .map((s, i) => {
+      const authors =
+        s.authors.length > 0 ? s.authors.join(", ") : "Unknown Authors";
+      const page = s.page !== null ? `, p.${s.page + 1}` : "";
+      return `[${i + 1}] "${s.paper_title}" by ${authors}${page}\n${s.content}`;
+    })
+    .join("\n\n---\n\n");
+
   const historyText = history
-    .slice(-6) // only last 3 exchanges to keep prompt short
+    .slice(-6)
     .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
     .join("\n");
 
-  return `You are a helpful academic assistant. Answer questions based ONLY on the provided document context. If the answer is not in the context, say "I couldn't find that in the document."
+  return `You are an expert academic research assistant helping with a literature review. 
+You have been given excerpts from multiple research papers as context.
 
-DOCUMENT CONTEXT:
-${context}
+CRITICAL INSTRUCTIONS:
+- Answer ONLY based on the provided paper excerpts below.
+- You MUST cite the paper number (e.g. [1], [2]) after every claim you make.
+- When comparing findings across papers, explicitly name which paper says what.
+- If the answer cannot be found in the excerpts, say: "The provided papers do not contain enough information to answer this."
+- Do not use any knowledge outside of the provided excerpts.
+
+PAPER EXCERPTS:
+${contextBlock}
 
 ${historyText ? `CONVERSATION HISTORY:\n${historyText}\n` : ""}
 User: ${question}
@@ -68,57 +78,64 @@ Assistant:`;
 
 export async function POST(req: NextRequest) {
   try {
-    // 1. Auth check
     const { userId } = await auth();
     if (!userId) {
       return new Response("Unauthorized", { status: 401 });
     }
 
     const body: ChatRequestBody = await req.json();
-    const { docId, question, history } = body;
+    const { projectId, question, history } = body;
 
-    if (!docId || !question?.trim()) {
-      return new Response("Missing docId or question", { status: 400 });
+    if (!projectId || !question?.trim()) {
+      return new Response("Missing projectId or question", { status: 400 });
     }
 
-    // 2. Verify the user owns this document
     await connectToDatabase();
-    const doc = await DocumentModel.findOne({
-      _id: docId,
+
+    // Verify ownership
+    const project = await ProjectModel.findOne({
+      _id: projectId,
       clerkUserId: userId,
     });
-
-    if (!doc) {
-      return new Response("Document not found", { status: 404 });
+    if (!project) {
+      return new Response("Project not found", { status: 404 });
     }
 
-    // 3. Get relevant chunks from FastAPI
-    const context = await getRelevantChunks(question, docId);
-
-    // 4. Build prompt
-    const prompt = buildPrompt(context, history, question);
-
-    // 5. Call Ollama and get a streaming response
-    const ollamaUrl = process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434";
-    const ollamaModel = process.env.OLLAMA_MODEL ?? "llama3.2";
-
-    const ollamaRes = await fetch(`${ollamaUrl}/api/generate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: ollamaModel,
-        prompt,
-        stream: true,
-      }),
+    // Check at least one paper is ready
+    const readyCount = await PaperModel.countDocuments({
+      projectId,
+      clerkUserId: userId,
+      status: "ready",
     });
+    if (readyCount === 0) {
+      return new Response(
+        "No papers are ready yet. Please wait for ingestion to complete.",
+        { status: 400 },
+      );
+    }
+
+    // Get relevant chunks across all papers in this project
+    const { sources } = await getRelevantChunks(question, projectId);
+
+    const prompt = buildPrompt(sources, history, question);
+
+    const ollamaRes = await fetch(
+      `${process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434"}/api/generate`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: process.env.OLLAMA_MODEL ?? "llama3.2",
+          prompt,
+          stream: true,
+        }),
+      },
+    );
 
     if (!ollamaRes.ok || !ollamaRes.body) {
-      throw new Error(`Ollama request failed: ${ollamaRes.status}`);
+      throw new Error(`Ollama failed: ${ollamaRes.status}`);
     }
 
-    // 6. Transform Ollama's stream into a plain text stream for the client
-    // Ollama sends newline-delimited JSON: { "response": "token", "done": false }
-    // We extract just the text tokens and forward them
     const stream = new ReadableStream({
       async start(controller) {
         const reader = ollamaRes.body!.getReader();
@@ -129,10 +146,10 @@ export async function POST(req: NextRequest) {
             const { done, value } = await reader.read();
             if (done) break;
 
-            const chunk = decoder.decode(value, { stream: true });
-
-            // Each chunk may contain multiple newline-delimited JSON objects
-            const lines = chunk.split("\n").filter(Boolean);
+            const lines = decoder
+              .decode(value, { stream: true })
+              .split("\n")
+              .filter(Boolean);
 
             for (const line of lines) {
               try {
@@ -157,7 +174,6 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Return as a plain text stream
     return new Response(stream, {
       headers: {
         "Content-Type": "text/plain; charset=utf-8",
