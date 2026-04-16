@@ -47,12 +47,14 @@ export async function DELETE(
         if (key) await utApi.deleteFiles(key);
       })(),
       // FAISS index
-      fetch(`${process.env.RAG_API_URL}/document/${paperId}`, {
-        method: "DELETE",
-        headers: {
-          "x-internal-token": process.env.INTERNAL_API_SECRET!,
+      // When deleting a single paper:
+      fetch(
+        `${process.env.RAG_API_URL}/project/${projectId}/paper/${paperId}`,
+        {
+          method: "DELETE",
+          headers: { "x-internal-token": process.env.INTERNAL_API_SECRET! },
         },
-      }),
+      ),
     ]);
 
     return NextResponse.json({ success: true, paperId });

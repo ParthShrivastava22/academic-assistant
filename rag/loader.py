@@ -1,5 +1,5 @@
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_core.documents import Document
+from langchain.schema import Document
 import os
 import requests
 import tempfile
@@ -25,11 +25,17 @@ def load_documents(folder_path):
     return documents
 
 
-# ── New: load a single PDF from a URL ──────────────────────────────────
-def load_document_from_url(file_url: str, doc_id: str) -> list[Document]:
+# ── Updated: load from URL with full metadata tagging ──────────────────
+def load_document_from_url(
+    file_url: str,
+    paper_id: str,
+    project_id: str,
+    paper_title: str,
+    authors: list[str],
+) -> list[Document]:
     """
-    Downloads a PDF from UploadThing CDN into a temp file,
-    loads it with PyPDFLoader, tags every page with doc_id.
+    Downloads a PDF from UploadThing CDN and loads it with PyPDFLoader.
+    Tags every page chunk with paper metadata so the LLM can cite sources.
     """
 
     response = requests.get(file_url, timeout=30)
@@ -43,8 +49,14 @@ def load_document_from_url(file_url: str, doc_id: str) -> list[Document]:
         loader = PyPDFLoader(tmp_path)
         docs = loader.load()
 
+        # Tag every chunk — this is what enables per-paper citations later
         for doc in docs:
-            doc.metadata["doc_id"] = doc_id
+            doc.metadata.update({
+                "paper_id":    paper_id,
+                "project_id":  project_id,
+                "paper_title": paper_title,
+                "authors":     ", ".join(authors) if authors else "Unknown",
+            })
 
         return docs
     finally:

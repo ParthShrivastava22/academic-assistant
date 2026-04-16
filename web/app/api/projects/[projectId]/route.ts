@@ -17,16 +17,14 @@ function extractFileKey(fileUrl: string): string | null {
   }
 }
 
-async function deleteFaissIndex(paperId: string) {
+async function deleteFaissProjectIndex(projectId: string) {
   try {
-    await fetch(`${process.env.RAG_API_URL}/document/${paperId}`, {
+    await fetch(`${process.env.RAG_API_URL}/project/${projectId}`, {
       method: "DELETE",
-      headers: {
-        "x-internal-token": process.env.INTERNAL_API_SECRET!,
-      },
+      headers: { "x-internal-token": process.env.INTERNAL_API_SECRET! },
     });
   } catch (err) {
-    console.error(`[DELETE_FAISS] paper ${paperId}:`, err);
+    console.error("[DELETE_FAISS_PROJECT]", err);
   }
 }
 
@@ -123,7 +121,7 @@ export async function DELETE(
             if (key) await utApi.deleteFiles(key);
           })(),
           // FAISS index on FastAPI
-          deleteFaissIndex(paperId),
+          deleteFaissProjectIndex(projectId),
         ]);
       }),
     );

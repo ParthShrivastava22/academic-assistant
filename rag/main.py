@@ -2,13 +2,18 @@ from fastapi import FastAPI, HTTPException, Header, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from pipeline import ingest_document, query_document, delete_document_index
+from pipeline import (
+    ingest_document,
+    query_project,
+    delete_project_index,
+    delete_paper_from_index,
+)
 import os
-import httpx  # for the status callback to Next.js
+import httpx
 
 load_dotenv()
 
-app = FastAPI(title="Lexis RAG API", version="1.0.0")
+app = FastAPI(title="Lexis RAG API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -22,6 +27,8 @@ app.add_middleware(
 )
 
 
+# ── Auth ────────────────────────────────────────────────────────────────
+
 def verify_internal_token(x_internal_token: str = Header(...)):
     if x_internal_token != os.environ["INTERNAL_API_SECRET"]:
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -30,8 +37,11 @@ def verify_internal_token(x_internal_token: str = Header(...)):
 # ── Models ──────────────────────────────────────────────────────────────
 
 class IngestRequest(BaseModel):
-    doc_id: str
+    doc_id: str          # paper_id (MongoDB Paper _id)
+    project_id: str      # which project this paper belongs to
     file_url: str
+    paper_title: str
+    authors: list[str] = []
 
 class IngestResponse(BaseModel):
     success: bool
@@ -39,53 +49,73 @@ class IngestResponse(BaseModel):
     message: str
 
 class QueryRequest(BaseModel):
-    doc_id: str
+    project_id: str      # query across whole project
     question: str
+    top_k: int = 6
 
 class SourceChunk(BaseModel):
     content: str
+    paper_id: str | None
+    paper_title: str
+    authors: str
     page: int | None
 
 class QueryResponse(BaseModel):
-    doc_id: str
+    project_id: str
     question: str
     sources: list[SourceChunk]
 
 
-# ── Background task ─────────────────────────────────────────────────────
+# ── Background ingestion ─────────────────────────────────────────────────
 
-def run_ingestion(doc_id: str, file_url: str, callback_url: str, secret: str):
-    """
-    Runs in the background after /ingest returns 202.
-    Ingests the document, then POSTs the result back to Next.js
-    so MongoDB status can be updated to "ready" or "error".
-    """
+def run_ingestion(
+    paper_id: str,
+    project_id: str,
+    file_url: str,
+    paper_title: str,
+    authors: list[str],
+    callback_url: str,
+    secret: str,
+):
+    """Runs in background after /ingest returns 202."""
     try:
-        chunks_stored = ingest_document(file_url=file_url, doc_id=doc_id)
+        chunks_stored = ingest_document(
+            file_url=file_url,
+            doc_id=paper_id,
+            project_id=project_id,
+            paper_title=paper_title,
+            authors=authors,
+        )
         status = "ready"
-        print(f"[INGEST] ✓ doc {doc_id} — {chunks_stored} chunks stored")
+        print(f"[INGEST] ✓ paper {paper_id} in project {project_id} "
+              f"— {chunks_stored} chunks")
     except Exception as e:
+        chunks_stored = 0
         status = "error"
-        print(f"[INGEST] ✗ doc {doc_id} — {e}")
+        print(f"[INGEST] ✗ paper {paper_id}: {e}")
 
-    # Call back to Next.js to update MongoDB status
+    # Callback to Next.js to update MongoDB
     try:
         with httpx.Client() as client:
             client.post(
                 callback_url,
-                json={"doc_id": doc_id, "status": status},
+                json={
+                    "doc_id": paper_id,
+                    "status": status,
+                    "chunk_count": chunks_stored,
+                },
                 headers={"x-internal-token": secret},
                 timeout=10,
             )
     except Exception as e:
-        print(f"[INGEST] Callback failed for doc {doc_id}: {e}")
+        print(f"[INGEST] Callback failed for paper {paper_id}: {e}")
 
 
-# ── Routes ──────────────────────────────────────────────────────────────
+# ── Routes ───────────────────────────────────────────────────────────────
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok"}
+    return {"status": "ok", "version": "2.0.0"}
 
 
 @app.post("/ingest", response_model=IngestResponse, status_code=202)
@@ -94,28 +124,25 @@ def ingest(
     background_tasks: BackgroundTasks,
     x_internal_token: str = Header(...),
 ):
-    """
-    Accepts the ingest job and returns 202 Accepted immediately.
-    The actual ingestion runs in the background via BackgroundTasks.
-    """
     verify_internal_token(x_internal_token)
 
     web_url = os.environ.get("WEB_URL", "http://localhost:3000")
-    callback_url = f"{web_url}/api/ingest-callback"
-    secret = os.environ["INTERNAL_API_SECRET"]
 
     background_tasks.add_task(
         run_ingestion,
-        doc_id=req.doc_id,
+        paper_id=req.doc_id,
+        project_id=req.project_id,
         file_url=req.file_url,
-        callback_url=callback_url,
-        secret=secret,
+        paper_title=req.paper_title,
+        authors=req.authors,
+        callback_url=f"{web_url}/api/ingest-callback",
+        secret=os.environ["INTERNAL_API_SECRET"],
     )
 
     return IngestResponse(
         success=True,
         doc_id=req.doc_id,
-        message="Ingestion started in background",
+        message=f"Ingestion started for '{req.paper_title}'",
     )
 
 
@@ -124,9 +151,13 @@ def query(req: QueryRequest, x_internal_token: str = Header(...)):
     verify_internal_token(x_internal_token)
 
     try:
-        sources = query_document(question=req.question, doc_id=req.doc_id)
+        sources = query_project(
+            question=req.question,
+            project_id=req.project_id,
+            top_k=req.top_k,
+        )
         return QueryResponse(
-            doc_id=req.doc_id,
+            project_id=req.project_id,
             question=req.question,
             sources=[SourceChunk(**s) for s in sources],
         )
@@ -136,12 +167,40 @@ def query(req: QueryRequest, x_internal_token: str = Header(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/document/{doc_id}")
-def delete_document(doc_id: str, x_internal_token: str = Header(...)):
+@app.delete("/project/{project_id}")
+def delete_project(project_id: str, x_internal_token: str = Header(...)):
+    """Called when a user deletes an entire project."""
     verify_internal_token(x_internal_token)
 
     try:
-        existed = delete_document_index(doc_id)
-        return {"success": True, "doc_id": doc_id, "index_existed": existed}
+        existed = delete_project_index(project_id)
+        return {"success": True, "project_id": project_id, "existed": existed}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/project/{project_id}/paper/{paper_id}")
+def delete_paper(
+    project_id: str,
+    paper_id: str,
+    x_internal_token: str = Header(...),
+):
+    """
+    Called when a user deletes a single paper.
+    Rebuilds the project FAISS index without that paper's chunks.
+    """
+    verify_internal_token(x_internal_token)
+
+    try:
+        existed = delete_paper_from_index(
+            paper_id=paper_id,
+            project_id=project_id,
+        )
+        return {
+            "success": True,
+            "paper_id": paper_id,
+            "project_id": project_id,
+            "existed": existed,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
