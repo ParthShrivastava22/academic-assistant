@@ -1,37 +1,45 @@
 import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import { connectToDatabase } from "@/lib/mongodb";
-import { DocumentModel, type IDocument } from "@/models/Document";
+import { ProjectModel } from "@/models/Project";
+import { PaperModel } from "@/models/Paper";
 import { DashboardClient } from "@/components/dashboard-client";
 
-async function getUserDocuments(userId: string) {
+async function getUserProjects(userId: string) {
   await connectToDatabase();
 
-  const docs = await DocumentModel.find({ clerkUserId: userId })
-    .sort({ createdAt: -1 }) // newest first
-    .lean(); // returns plain JS objects instead of Mongoose documents
+  const projects = await ProjectModel.find({ clerkUserId: userId })
+    .sort({ createdAt: -1 })
+    .lean();
 
-  // Serialize for the client (converts ObjectId and Date to strings)
-  return docs.map((doc) => ({
-    id: (doc._id as string).toString(),
-    title: doc.title,
-    fileUrl: doc.fileUrl,
-    pageCount: doc.pageCount ?? 0,
-    status: doc.status as "processing" | "ready" | "error",
-    uploadedAt: doc.createdAt.toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
+  return Promise.all(
+    projects.map(async (project) => {
+      const [paperCount, readyCount] = await Promise.all([
+        PaperModel.countDocuments({ projectId: project._id }),
+        PaperModel.countDocuments({ projectId: project._id, status: "ready" }),
+      ]);
+
+      return {
+        id: project._id.toString(),
+        title: project.title,
+        description: project.description ?? "",
+        paperCount,
+        readyCount,
+        createdAt: project.createdAt.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        }),
+      };
     }),
-    messageCount: 0, // wire up later when chat history is built
-  }));
+  );
 }
 
 export default async function DashboardPage() {
   const { userId } = await auth();
   if (!userId) redirect("/sign-in");
 
-  const documents = await getUserDocuments(userId);
+  const projects = await getUserProjects(userId);
 
-  return <DashboardClient documents={documents} />;
+  return <DashboardClient projects={projects} />;
 }

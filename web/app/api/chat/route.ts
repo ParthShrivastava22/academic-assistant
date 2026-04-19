@@ -37,17 +37,19 @@ function buildPrompt(
   sources: {
     content: string;
     paper_title: string;
-    authors: string[];
+    authors: string | string[]; // ← accept both types defensively
     page: number | null;
   }[],
   history: Message[],
   question: string,
 ): string {
-  // Format each chunk with its paper citation
   const contextBlock = sources
     .map((s, i) => {
-      const authors =
-        s.authors.length > 0 ? s.authors.join(", ") : "Unknown Authors";
+      // Handles both string and array defensively
+      const authors = Array.isArray(s.authors)
+        ? s.authors.join(", ") || "Unknown Authors"
+        : s.authors || "Unknown Authors";
+
       const page = s.page !== null ? `, p.${s.page + 1}` : "";
       return `[${i + 1}] "${s.paper_title}" by ${authors}${page}\n${s.content}`;
     })
@@ -58,7 +60,7 @@ function buildPrompt(
     .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
     .join("\n");
 
-  return `You are an expert academic research assistant helping with a literature review. 
+  return `You are an expert academic research assistant helping with a literature review.
 You have been given excerpts from multiple research papers as context.
 
 CRITICAL INSTRUCTIONS:

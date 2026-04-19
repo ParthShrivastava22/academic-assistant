@@ -9,11 +9,23 @@ async function triggerIngestion(
   fileUrl: string,
   title: string,
   authors: string[],
+  projectId: string, // ← make sure this parameter exists
 ) {
   const ragApiUrl = process.env.RAG_API_URL;
   const secret = process.env.INTERNAL_API_SECRET;
 
   if (!ragApiUrl || !secret) return;
+
+  const payload = {
+    doc_id: paperId,
+    project_id: projectId,
+    file_url: fileUrl,
+    paper_title: title,
+    authors,
+  };
+
+  // Temporary — remove after debugging
+  console.log("[INGEST_PAYLOAD]", JSON.stringify(payload, null, 2));
 
   try {
     await fetch(`${ragApiUrl}/ingest`, {
@@ -22,13 +34,7 @@ async function triggerIngestion(
         "Content-Type": "application/json",
         "x-internal-token": secret,
       },
-      body: JSON.stringify({
-        doc_id: paperId,
-        file_url: fileUrl,
-        // Pass metadata so FastAPI can tag every chunk
-        paper_title: title,
-        authors,
-      }),
+      body: JSON.stringify(payload),
     });
   } catch (err) {
     console.error("[INGEST_TRIGGER]", err);
@@ -117,7 +123,7 @@ export async function POST(
     const paperId = paper._id.toString();
 
     // Fire ingestion — FastAPI returns 202 immediately
-    triggerIngestion(paperId, fileUrl, paper.title, paper.authors);
+    triggerIngestion(paperId, fileUrl, paper.title, paper.authors, projectId);
 
     return NextResponse.json(
       {

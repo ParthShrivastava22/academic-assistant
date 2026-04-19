@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Header, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Header, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -14,6 +14,12 @@ import httpx
 load_dotenv()
 
 app = FastAPI(title="Lexis RAG API", version="2.0.0")
+
+@app.exception_handler(422)
+async def validation_exception_handler(request: Request, exc):
+    print("[422 BODY]", await request.body())
+    from fastapi.exception_handlers import request_validation_exception_handler
+    return await request_validation_exception_handler(request, exc)
 
 app.add_middleware(
     CORSMiddleware,
@@ -68,16 +74,7 @@ class QueryResponse(BaseModel):
 
 # ── Background ingestion ─────────────────────────────────────────────────
 
-def run_ingestion(
-    paper_id: str,
-    project_id: str,
-    file_url: str,
-    paper_title: str,
-    authors: list[str],
-    callback_url: str,
-    secret: str,
-):
-    """Runs in background after /ingest returns 202."""
+def run_ingestion(paper_id, project_id, file_url, paper_title, authors, callback_url, secret):
     try:
         chunks_stored = ingest_document(
             file_url=file_url,
@@ -87,17 +84,17 @@ def run_ingestion(
             authors=authors,
         )
         status = "ready"
-        print(f"[INGEST] ✓ paper {paper_id} in project {project_id} "
-              f"— {chunks_stored} chunks")
+        print(f"[INGEST] ✓ paper {paper_id} in project {project_id} — {chunks_stored} chunks")
     except Exception as e:
         chunks_stored = 0
         status = "error"
         print(f"[INGEST] ✗ paper {paper_id}: {e}")
 
-    # Callback to Next.js to update MongoDB
+    # Add these logs:
+    print(f"[CALLBACK] Sending status '{status}' to {callback_url}")
     try:
         with httpx.Client() as client:
-            client.post(
+            response = client.post(
                 callback_url,
                 json={
                     "doc_id": paper_id,
@@ -107,8 +104,9 @@ def run_ingestion(
                 headers={"x-internal-token": secret},
                 timeout=10,
             )
+            print(f"[CALLBACK] Response: {response.status_code} — {response.text}")
     except Exception as e:
-        print(f"[INGEST] Callback failed for paper {paper_id}: {e}")
+        print(f"[CALLBACK] Failed for paper {paper_id}: {e}")
 
 
 # ── Routes ───────────────────────────────────────────────────────────────
