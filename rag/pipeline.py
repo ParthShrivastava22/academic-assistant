@@ -86,19 +86,21 @@ def ingest_document(
 def query_project(
     question: str,
     project_id: str,
-    top_k: int = 6,       # higher than before — pulling from multiple papers
+    top_k: int = 6,
 ) -> list[dict]:
-    """
-    Query the project's shared FAISS index.
-    Returns chunks with full paper metadata for citation.
-    top_k=6 gives ~1-2 chunks per paper for a 5-paper project.
-    """
-
     embeddings = load_embedding_model()
     vector_db = _load_project_index(project_id, embeddings)
 
     retriever = vector_db.as_retriever(search_kwargs={"k": top_k})
     docs = retriever.invoke(question)
+
+    # Deduplicate: only keep the highest-scoring chunk per paper
+    # so citations reflect unique papers, not repeated chunks
+    seen_papers = {}
+    for doc in docs:
+        pid = doc.metadata.get("paper_id", "unknown")
+        if pid not in seen_papers:
+            seen_papers[pid] = doc
 
     return [
         {
@@ -109,7 +111,7 @@ def query_project(
             "page":        doc.metadata.get("page", None),
             "project_id":  doc.metadata.get("project_id", project_id),
         }
-        for doc in docs
+        for doc in seen_papers.values()
     ]
 
 

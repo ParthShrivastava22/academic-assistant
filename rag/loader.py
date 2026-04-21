@@ -38,7 +38,7 @@ def load_document_from_url(
     Tags every page chunk with paper metadata so the LLM can cite sources.
     """
 
-    response = requests.get(file_url, timeout=30)
+    response = requests.get(file_url, timeout=30, stream = True)
     response.raise_for_status()
 
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
@@ -57,7 +57,6 @@ def load_document_from_url(
                 "paper_title": paper_title,
                 "authors":     ", ".join(authors) if authors else "Unknown",
             })
-
         return docs
     finally:
         os.unlink(tmp_path)
