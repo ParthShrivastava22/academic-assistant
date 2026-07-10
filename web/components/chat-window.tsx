@@ -139,8 +139,8 @@ export function ChatWindow({
             Synthesis Chat
           </p>
           <p className="text-[10px] text-muted-foreground">
-            {readyPaperCount} paper{readyPaperCount !== 1 ? "s" : ""} · Ollama ·
-            FAISS RAG
+            {readyPaperCount} paper{readyPaperCount !== 1 ? "s" : ""} ·
+            ScholarAI · FAISS RAG
           </p>
         </div>
       </div>

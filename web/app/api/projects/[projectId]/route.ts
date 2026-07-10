@@ -83,7 +83,6 @@ export async function GET(
 }
 
 // DELETE /api/projects/[projectId]
-// Cascades: deletes all papers (UploadThing + FAISS) and chat sessions
 export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ projectId: string }> },

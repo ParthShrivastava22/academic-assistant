@@ -35,7 +35,7 @@ export function DashboardClient({ projects }: DashboardClientProps) {
               className="text-lg font-semibold"
               style={{ fontFamily: "var(--font-crimson)" }}
             >
-              Lexis
+              ScholarAI
             </span>
             <span className="text-muted-foreground/40 mx-1">/</span>
             <span className="text-sm text-muted-foreground font-medium">
